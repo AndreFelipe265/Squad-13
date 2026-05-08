@@ -1,0 +1,954 @@
+import { useState, useEffect } from "react";
+import { useNavigate, useSearchParams } from "react-router-dom";
+import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog";
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from "@/components/ui/alert-dialog";
+import { Plus, FileText, Trash2, Search, Pin, PinOff, Variable, LayoutTemplate, ArrowRight, Users, UserRound, Save, Braces } from "lucide-react";
+import { toast } from "sonner";
+import bonsaiImg from "@/assets/bonsai-empty.png";
+import { getPinnedTemplates, togglePinTemplate, type PinnedTemplate } from "@/components/AppSidebar";
+import { getDocumentPreviewText } from "@/lib/documentPreview";
+import { getApiErrorMessage } from "@/lib/api";
+import {
+  createDocumentFromTemplate,
+  deleteSavedDocument,
+  getDocumentList,
+  type SavedDocument,
+} from "@/lib/documents";
+import {
+  CLIENT_VARIABLES,
+  createClient,
+  deleteClient,
+  getClientList,
+  updateClient,
+  type SavedClient,
+} from "@/lib/clients";
+import {
+  deleteSavedTemplate,
+  getTemplateList,
+  type SavedTemplate,
+} from "@/lib/templates";
+import { makeUniqueTitle } from "@/lib/titles";
+
+const VARIABLE_LIST_KEY = "bonsae-variable-list";
+
+export interface CustomVariable {
+  id: string;
+  key: string;
+  label: string;
+  icon: string;
+}
+
+export function getCustomVariables(): CustomVariable[] {
+  try {
+    return JSON.parse(localStorage.getItem(VARIABLE_LIST_KEY) || "[]");
+  } catch {
+    return [];
+  }
+}
+
+export function saveCustomVariables(vars: CustomVariable[]) {
+  localStorage.setItem(VARIABLE_LIST_KEY, JSON.stringify(vars));
+}
+
+const defaultVariables: CustomVariable[] = CLIENT_VARIABLES.map((variable) => ({ ...variable }));
+
+export function getAvailableVariables(): CustomVariable[] {
+  saveCustomVariables(defaultVariables);
+  return defaultVariables;
+}
+
+const formatDate = (dateStr: string) => {
+  try {
+    return new Date(dateStr).toLocaleDateString("pt-BR", {
+      day: "2-digit",
+      month: "short",
+      year: "numeric",
+    });
+  } catch {
+    return "";
+  }
+};
+
+// ==== Tab Components ====
+
+function DocumentsTab() {
+  const navigate = useNavigate();
+  const [documents, setDocuments] = useState<SavedDocument[]>([]);
+  const [templates, setTemplates] = useState<SavedTemplate[]>([]);
+  const [clients, setClients] = useState<SavedClient[]>([]);
+  const [searchQuery, setSearchQuery] = useState("");
+  const [showTemplatePicker, setShowTemplatePicker] = useState(false);
+  const [selectedTemplate, setSelectedTemplate] = useState<SavedTemplate | null>(null);
+  const [showDocumentClientPicker, setShowDocumentClientPicker] = useState(false);
+  const [isLoading, setIsLoading] = useState(true);
+  const [isCreatingDocument, setIsCreatingDocument] = useState(false);
+
+  useEffect(() => {
+    let ignore = false;
+    async function loadRemoteData() {
+      try {
+        const [loadedDocuments, loadedTemplates, loadedClients] = await Promise.all([
+          getDocumentList(),
+          getTemplateList(),
+          getClientList(),
+        ]);
+        if (!ignore) {
+          setDocuments(loadedDocuments);
+          setTemplates(loadedTemplates);
+          setClients(loadedClients);
+        }
+      } catch (error) {
+        toast.error(getApiErrorMessage(error));
+      } finally {
+        if (!ignore) setIsLoading(false);
+      }
+    }
+
+    void loadRemoteData();
+    return () => {
+      ignore = true;
+    };
+  }, []);
+
+  const filteredDocs = documents.filter((doc) =>
+    doc.title.toLowerCase().includes(searchQuery.toLowerCase())
+  );
+
+  const handleDelete = async (e: React.MouseEvent, docId: string) => {
+    e.stopPropagation();
+    try {
+      await deleteSavedDocument(docId);
+      setDocuments((current) => current.filter((document) => document.id !== docId));
+      toast.success("Documento excluído.");
+    } catch (error) {
+      toast.error(getApiErrorMessage(error));
+    }
+  };
+
+  const handleCreateTemplate = () => {
+    setShowTemplatePicker(false);
+    navigate(`/editor?type=template&draftId=${crypto.randomUUID()}`);
+  };
+
+  const handleOpenClientPicker = (template: SavedTemplate) => {
+    setSelectedTemplate(template);
+    setShowTemplatePicker(false);
+    setShowDocumentClientPicker(true);
+  };
+
+  const handleNewFromTemplate = async (template: SavedTemplate, client: SavedClient | null) => {
+    if (isCreatingDocument) return;
+    setIsCreatingDocument(true);
+    try {
+      const newDoc = await createDocumentFromTemplate(
+        template,
+        client,
+        documents.map((doc) => doc.title)
+      );
+      setDocuments((current) => [
+        newDoc,
+        ...current.filter((document) => document.id !== newDoc.id),
+      ]);
+      setShowDocumentClientPicker(false);
+      setSelectedTemplate(null);
+      navigate(`/editor?id=${newDoc.id}`);
+      toast.success("Documento criado a partir do template.");
+    } catch (error) {
+      toast.error(getApiErrorMessage(error));
+    } finally {
+      setIsCreatingDocument(false);
+    }
+  };
+
+  return (
+    <>
+      <div className="flex items-center gap-3 mb-6">
+        <div className="flex-1 max-w-md relative">
+          <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
+          <Input
+            type="text"
+            placeholder="Buscar documentos..."
+            value={searchQuery}
+            onChange={(e) => setSearchQuery(e.target.value)}
+            className="pl-9"
+          />
+        </div>
+        <Button
+          onClick={() => setShowTemplatePicker(true)}
+          size="sm"
+          className="gap-2"
+          disabled={isLoading || isCreatingDocument}
+        >
+          <Plus className="h-4 w-4" />
+          Novo Documento
+        </Button>
+      </div>
+
+      <Dialog open={showTemplatePicker} onOpenChange={setShowTemplatePicker}>
+        <DialogContent className="max-w-lg">
+          <DialogHeader>
+            <DialogTitle>Escolha um template</DialogTitle>
+            <DialogDescription>Selecione o template base para criar seu documento.</DialogDescription>
+          </DialogHeader>
+            {templates.length === 0 ? (
+              <div className="text-center py-8">
+                <LayoutTemplate className="h-10 w-10 text-muted-foreground/30 mx-auto mb-3" />
+                <p className="text-sm text-muted-foreground">Nenhum template disponível.</p>
+                <Button onClick={handleCreateTemplate} variant="outline" size="sm" className="mt-3 gap-2">
+                  <Plus className="h-4 w-4" />
+                  Criar Template
+                </Button>
+              </div>
+            ) : (
+              <div className="space-y-2 max-h-[300px] overflow-y-auto">
+                {templates.map((t) => (
+                  <button
+                    key={t.id}
+                    onClick={() => handleOpenClientPicker(t)}
+                    disabled={isCreatingDocument}
+                    className="w-full flex items-center gap-3 px-4 py-3 rounded-lg border border-border hover:border-primary/40 hover:bg-accent/50 transition-all text-left"
+                  >
+                    <LayoutTemplate className="h-5 w-5 text-primary shrink-0" />
+                    <div className="min-w-0 flex-1">
+                      <p className="text-sm font-medium text-foreground truncate">{t.title}</p>
+                      <p className="text-xs text-muted-foreground">
+                        Atualizado em {formatDate(t.updatedAt)}
+                      </p>
+                    </div>
+                  </button>
+                ))}
+              </div>
+            )}
+        </DialogContent>
+      </Dialog>
+
+      <Dialog open={showDocumentClientPicker} onOpenChange={setShowDocumentClientPicker}>
+        <DialogContent className="max-w-lg">
+          <DialogHeader>
+            <DialogTitle>Escolha o cliente</DialogTitle>
+            <DialogDescription>
+              O documento sera criado com as variaveis do cliente selecionado.
+            </DialogDescription>
+          </DialogHeader>
+          <div className="space-y-2 max-h-[360px] overflow-y-auto">
+            <button
+              disabled
+              className="w-full flex items-center gap-3 px-4 py-3 rounded-lg border border-dashed border-border bg-muted/30 text-left opacity-70"
+            >
+              <Braces className="h-5 w-5 text-primary shrink-0" />
+              <div className="min-w-0 flex-1">
+                <p className="text-sm font-medium text-foreground truncate">Sem cliente</p>
+                <p className="text-xs text-muted-foreground">
+                  O back-end exige cliente para salvar documentos
+                </p>
+              </div>
+            </button>
+            {clients.map((client) => (
+              <button
+                key={client.id}
+                onClick={() => selectedTemplate && handleNewFromTemplate(selectedTemplate, client)}
+                disabled={isCreatingDocument}
+                className="w-full flex items-center gap-3 px-4 py-3 rounded-lg border border-border hover:border-primary/40 hover:bg-accent/50 transition-all text-left"
+              >
+                <Users className="h-5 w-5 text-primary shrink-0" />
+                <div className="min-w-0 flex-1">
+                  <p className="text-sm font-medium text-foreground truncate">{client.name}</p>
+                  <p className="text-xs text-muted-foreground">
+                    {client.values.nome_cliente || "Cliente sem nome preenchido"}
+                  </p>
+                </div>
+              </button>
+            ))}
+          </div>
+        </DialogContent>
+      </Dialog>
+
+      {isLoading ? (
+        <div className="rounded-xl border border-border bg-card px-4 py-3 text-sm text-muted-foreground">
+          Carregando documentos...
+        </div>
+      ) : filteredDocs.length === 0 ? (
+        <div className="flex flex-col items-center justify-center py-20 text-muted-foreground">
+          <img src={bonsaiImg} alt="Bonsai" className="h-60 mb-6 mix-blend-multiply animate-float" />
+          <p className="text-lg font-medium">Nenhum documento encontrado</p>
+          <p className="text-sm mt-1">Crie um documento a partir de um template existente.</p>
+          <Button
+            onClick={() => navigate("/?tab=templates")}
+            variant="outline"
+            className="mt-4 gap-2 bg-white text-foreground hover:bg-accent"
+          >
+            <LayoutTemplate className="h-4 w-4" />
+            Ver templates
+          </Button>
+        </div>
+      ) : (
+        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-4">
+          {filteredDocs.map((doc, i) => (
+            <div
+              key={doc.id}
+              onClick={() => navigate(`/editor?id=${doc.id}`)}
+              className="animate-fade-up group cursor-pointer rounded-xl border border-border bg-card overflow-hidden hover:ring-2 hover:ring-primary/40 transition-all hover:shadow-lg hover:-translate-y-0.5"
+              style={{ animationDelay: `${Math.min(i, 7) * 45}ms` }}
+            >
+              <div className="aspect-[4/3] bg-white flex items-start overflow-hidden relative">
+                {doc.html ? (
+                  <div className="w-full h-full pointer-events-none document-preview-mini">
+                    <p className="line-clamp-6 text-sm text-muted-foreground">
+                      {getDocumentPreviewText(doc.html)}
+                    </p>
+                  </div>
+                ) : (
+                  <div className="w-full h-full flex items-center justify-center bg-muted/50">
+                    <FileText className="h-12 w-12 text-muted-foreground/20" />
+                  </div>
+                )}
+                <button
+                  onClick={(e) => handleDelete(e, doc.id)}
+                  className="absolute top-2 right-2 p-1.5 rounded-md bg-background/80 text-muted-foreground hover:text-destructive hover:bg-background opacity-0 group-hover:opacity-100 transition-opacity"
+                  title="Excluir"
+                >
+                  <Trash2 className="h-3.5 w-3.5" />
+                </button>
+              </div>
+              <div className="p-3">
+                <p className="text-sm font-medium text-foreground truncate">{doc.title}</p>
+                <p className="text-xs text-muted-foreground mt-0.5">{formatDate(doc.updatedAt)}</p>
+              </div>
+            </div>
+          ))}
+        </div>
+      )}
+    </>
+  );
+}
+
+function HomeTab() {
+  const navigate = useNavigate();
+  const [documents, setDocuments] = useState<SavedDocument[]>([]);
+  const [templates, setTemplates] = useState<SavedTemplate[]>([]);
+
+  useEffect(() => {
+    let ignore = false;
+    async function loadFiles() {
+      try {
+        const [loadedDocuments, loadedTemplates] = await Promise.all([
+          getDocumentList(),
+          getTemplateList(),
+        ]);
+        if (!ignore) {
+          setDocuments(loadedDocuments);
+          setTemplates(loadedTemplates);
+        }
+      } catch (error) {
+        toast.error(getApiErrorMessage(error));
+      }
+    }
+
+    void loadFiles();
+    return () => {
+      ignore = true;
+    };
+  }, []);
+
+  const recentDocuments = [...documents]
+    .sort((a, b) => +new Date(b.updatedAt) - +new Date(a.updatedAt))
+    .slice(0, 4);
+  const recentTemplates = [...templates]
+    .sort((a, b) => +new Date(b.updatedAt) - +new Date(a.updatedAt))
+    .slice(0, 4);
+
+  return (
+    <div className="space-y-8">
+      {recentTemplates.length === 0 && recentDocuments.length === 0 && (
+        <section className="rounded-xl border border-border bg-card p-6">
+          <h2 className="text-lg font-semibold text-foreground">Como usar o Bonsae Documentos</h2>
+          <p className="text-sm text-muted-foreground mt-1">
+            Siga este fluxo para criar documentos padronizados com os dados reais dos clientes.
+          </p>
+          <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-4 gap-4 mt-5">
+            <div className="rounded-lg border border-border p-4 bg-background/50">
+              <p className="text-xs uppercase tracking-wider text-muted-foreground font-semibold">Passo 1</p>
+              <p className="text-sm font-medium mt-1">Cadastre os clientes</p>
+              <p className="text-xs text-muted-foreground mt-1">
+                Na aba Clientes, preencha os valores reais das variáveis para cada pessoa ou empresa.
+              </p>
+            </div>
+            <div className="rounded-lg border border-border p-4 bg-background/50">
+              <p className="text-xs uppercase tracking-wider text-muted-foreground font-semibold">Passo 2</p>
+              <p className="text-sm font-medium mt-1">Crie um template</p>
+              <p className="text-xs text-muted-foreground mt-1">
+                Escolha um cliente ou siga sem cliente, monte o modelo base e adicione o papel timbrado.
+              </p>
+            </div>
+            <div className="rounded-lg border border-border p-4 bg-background/50">
+              <p className="text-xs uppercase tracking-wider text-muted-foreground font-semibold">Passo 3</p>
+              <p className="text-sm font-medium mt-1">Use variáveis</p>
+              <p className="text-xs text-muted-foreground mt-1">
+                Insira variáveis como {`{{nome_cliente}}`}; com cliente selecionado, o editor mostra os valores reais.
+              </p>
+            </div>
+            <div className="rounded-lg border border-border p-4 bg-background/50">
+              <p className="text-xs uppercase tracking-wider text-muted-foreground font-semibold">Passo 4</p>
+              <p className="text-sm font-medium mt-1">Gere documentos</p>
+              <p className="text-xs text-muted-foreground mt-1">
+                Crie documentos a partir dos templates; eles nascem preenchidos e podem ser exportados em PDF.
+              </p>
+            </div>
+          </div>
+          <div className="flex flex-wrap gap-3 mt-5">
+            <Button onClick={() => navigate("/?tab=clients")} variant="outline" className="gap-2">
+              <Users className="h-4 w-4" />
+              Ir para Clientes
+            </Button>
+            <Button onClick={() => navigate("/?tab=templates")} className="gap-2">
+              <LayoutTemplate className="h-4 w-4" />
+              Ir para Templates
+            </Button>
+            <Button onClick={() => navigate("/?tab=documents")} variant="outline" className="gap-2">
+              <FileText className="h-4 w-4" />
+              Ver Documentos
+            </Button>
+          </div>
+        </section>
+      )}
+
+      <section className="space-y-4">
+        <div className="flex items-center justify-between">
+          <h3 className="text-base font-semibold text-foreground">Arquivos salvos</h3>
+          <Button variant="ghost" size="sm" className="gap-2" onClick={() => navigate("/?tab=templates")}>
+            Gerenciar
+            <ArrowRight className="h-4 w-4" />
+          </Button>
+        </div>
+
+        {recentTemplates.length === 0 && recentDocuments.length === 0 ? (
+          <div className="rounded-xl border border-dashed border-border p-8 text-center">
+            <p className="text-sm text-muted-foreground">Você ainda não tem templates ou documentos salvos.</p>
+          </div>
+        ) : (
+          <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
+            <div className="rounded-xl border border-border bg-card p-4">
+              <div className="flex items-center gap-2 mb-3">
+                <LayoutTemplate className="h-4 w-4 text-primary" />
+                <h4 className="text-sm font-semibold text-foreground">Templates recentes</h4>
+              </div>
+              {recentTemplates.length === 0 ? (
+                <p className="text-xs text-muted-foreground">Nenhum template criado ainda.</p>
+              ) : (
+                <div className="space-y-2">
+                  {recentTemplates.map((t) => (
+                    <button
+                      key={t.id}
+                      onClick={() => navigate(`/editor?id=${t.id}&type=template`)}
+                      className="w-full text-left px-3 py-2 rounded-lg border border-border hover:border-primary/30 hover:bg-accent/40 transition-colors"
+                    >
+                      <p className="text-sm font-medium text-foreground truncate">{t.title}</p>
+                      <p className="text-xs text-muted-foreground">{formatDate(t.updatedAt)}</p>
+                    </button>
+                  ))}
+                </div>
+              )}
+            </div>
+
+            <div className="rounded-xl border border-border bg-card p-4">
+              <div className="flex items-center gap-2 mb-3">
+                <FileText className="h-4 w-4 text-primary" />
+                <h4 className="text-sm font-semibold text-foreground">Documentos recentes</h4>
+              </div>
+              {recentDocuments.length === 0 ? (
+                <p className="text-xs text-muted-foreground">Nenhum documento criado ainda.</p>
+              ) : (
+                <div className="space-y-2">
+                  {recentDocuments.map((doc) => (
+                    <button
+                      key={doc.id}
+                      onClick={() => navigate(`/editor?id=${doc.id}`)}
+                      className="w-full text-left px-3 py-2 rounded-lg border border-border hover:border-primary/30 hover:bg-accent/40 transition-colors"
+                    >
+                      <p className="text-sm font-medium text-foreground truncate">{doc.title}</p>
+                      <p className="text-xs text-muted-foreground">{formatDate(doc.updatedAt)}</p>
+                    </button>
+                  ))}
+                </div>
+              )}
+            </div>
+          </div>
+        )}
+      </section>
+    </div>
+  );
+}
+
+function TemplatesTab() {
+  const navigate = useNavigate();
+  const [templates, setTemplates] = useState<SavedTemplate[]>([]);
+  const [searchQuery, setSearchQuery] = useState("");
+  const [pinned, setPinned] = useState<PinnedTemplate[]>([]);
+
+  useEffect(() => {
+    setPinned(getPinnedTemplates());
+
+    let ignore = false;
+    async function loadTemplates() {
+      try {
+        const loadedTemplates = await getTemplateList();
+        if (!ignore) setTemplates(loadedTemplates);
+      } catch (error) {
+        toast.error(getApiErrorMessage(error));
+      }
+    }
+
+    void loadTemplates();
+    return () => {
+      ignore = true;
+    };
+  }, []);
+
+  const filteredTemplates = templates.filter((t) =>
+    t.title.toLowerCase().includes(searchQuery.toLowerCase())
+  );
+
+  const handleDelete = async (e: React.MouseEvent, id: string) => {
+    e.stopPropagation();
+    try {
+      await deleteSavedTemplate(id);
+      const updated = templates.filter((t) => t.id !== id);
+      setTemplates(updated);
+      const deletedTemplate = templates.find((t) => t.id === id);
+      if (deletedTemplate && pinned.some((pin) => pin.id === id)) {
+        togglePinTemplate({ id: deletedTemplate.id, title: deletedTemplate.title });
+        setPinned(getPinnedTemplates());
+        window.dispatchEvent(new Event("pinned-updated"));
+      }
+      toast.success("Template excluido.");
+    } catch (error) {
+      toast.error(getApiErrorMessage(error));
+    }
+  };
+
+  const handlePin = (e: React.MouseEvent, t: SavedTemplate) => {
+    e.stopPropagation();
+    togglePinTemplate({ id: t.id, title: t.title });
+    setPinned(getPinnedTemplates());
+    window.dispatchEvent(new Event("pinned-updated"));
+    toast.success("Fixados atualizados.");
+  };
+
+  const isPinned = (id: string) => pinned.some((p) => p.id === id);
+
+  const handleCreateTemplate = () => {
+    navigate(`/editor?type=template&draftId=${crypto.randomUUID()}`);
+  };
+
+  const handleEditTemplate = (t: SavedTemplate) => {
+    navigate(`/editor?id=${t.id}&type=template`);
+  };
+
+  return (
+    <>
+      <div className="flex items-center gap-3 mb-6">
+        <div className="flex-1 max-w-md relative">
+          <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
+          <Input
+            type="text"
+            placeholder="Buscar templates..."
+            value={searchQuery}
+            onChange={(e) => setSearchQuery(e.target.value)}
+            className="pl-9"
+          />
+        </div>
+        <Button onClick={handleCreateTemplate} size="sm" className="gap-2">
+          <Plus className="h-4 w-4" />
+          Novo Template
+        </Button>
+      </div>
+
+      {filteredTemplates.length === 0 ? (
+        <div className="flex flex-col items-center justify-center py-20 text-muted-foreground">
+          <img src={bonsaiImg} alt="Bonsai" className="h-60 mb-6 mix-blend-multiply animate-float" />
+          <p className="text-lg font-medium">Nenhum template criado</p>
+          <p className="text-sm mt-1">Crie um template para começar a gerar documentos.</p>
+        </div>
+      ) : (
+        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-4">
+          {filteredTemplates.map((t, i) => (
+            <div
+              key={t.id}
+              onClick={() => handleEditTemplate(t)}
+              className="animate-fade-up group cursor-pointer rounded-xl border border-border bg-card overflow-hidden hover:ring-2 hover:ring-primary/40 transition-all hover:shadow-lg hover:-translate-y-0.5"
+              style={{ animationDelay: `${Math.min(i, 7) * 45}ms` }}
+            >
+              <div className="aspect-[4/3] bg-white flex items-start overflow-hidden relative">
+                {t.html ? (
+                  <div className="w-full h-full pointer-events-none document-preview-mini">
+                    <p className="line-clamp-6 text-sm text-muted-foreground">
+                      {getDocumentPreviewText(t.html)}
+                    </p>
+                  </div>
+                ) : (
+                  <div className="w-full h-full flex items-center justify-center bg-muted/50">
+                    <LayoutTemplate className="h-12 w-12 text-muted-foreground/20" />
+                  </div>
+                )}
+                <div className="absolute top-2 right-2 flex gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
+                  <button
+                    onClick={(e) => handlePin(e, t)}
+                    className="p-1.5 rounded-md bg-background/80 text-muted-foreground hover:text-primary hover:bg-background transition-colors"
+                    title={isPinned(t.id) ? "Desafixar" : "Fixar"}
+                  >
+                    {isPinned(t.id) ? <PinOff className="h-3.5 w-3.5" /> : <Pin className="h-3.5 w-3.5" />}
+                  </button>
+                  <button
+                    onClick={(e) => handleDelete(e, t.id)}
+                    className="p-1.5 rounded-md bg-background/80 text-muted-foreground hover:text-destructive hover:bg-background transition-colors"
+                    title="Excluir"
+                  >
+                    <Trash2 className="h-3.5 w-3.5" />
+                  </button>
+                </div>
+              </div>
+              <div className="p-3">
+                <div className="flex items-center gap-1.5">
+                  <LayoutTemplate className="h-3.5 w-3.5 text-primary" />
+                  <p className="text-sm font-medium text-foreground truncate">{t.title}</p>
+                </div>
+                <p className="text-xs text-muted-foreground mt-0.5">{formatDate(t.updatedAt)}</p>
+              </div>
+            </div>
+          ))}
+        </div>
+      )}
+    </>
+  );
+}
+
+function VariablesTab() {
+  const [variables, setVariables] = useState<CustomVariable[]>([]);
+
+  useEffect(() => {
+    setVariables(getAvailableVariables());
+  }, []);
+
+  return (
+    <>
+      {/* Variable list */}
+      <div className="space-y-2 client-switch-motion">
+        {variables.map((v, index) => (
+          <div
+            key={v.id}
+            className="flex items-center gap-3 px-4 py-3 bg-card border border-border rounded-xl hover:border-primary/30 transition-colors client-field-motion"
+            style={{ animationDelay: `${Math.min(index, 8) * 24}ms` }}
+          >
+            <div className="h-8 w-8 rounded-lg bg-primary/10 flex items-center justify-center shrink-0">
+              <Variable className="h-4 w-4 text-primary" />
+            </div>
+            <div className="flex-1 min-w-0">
+              <p className="text-sm font-medium text-foreground">{v.label}</p>
+              <p className="text-xs text-muted-foreground font-mono">{`{{${v.key}}}`}</p>
+            </div>
+          </div>
+        ))}
+      </div>
+    </>
+  );
+}
+
+function ClientsTab() {
+  const [clients, setClients] = useState<SavedClient[]>([]);
+  const [variables, setVariables] = useState<CustomVariable[]>([]);
+  const [selectedClientId, setSelectedClientId] = useState<string | null>(null);
+  const [draftValues, setDraftValues] = useState<Record<string, string>>({});
+  const [isLoading, setIsLoading] = useState(true);
+  const [isSaving, setIsSaving] = useState(false);
+  const [showDeleteDialog, setShowDeleteDialog] = useState(false);
+
+  useEffect(() => {
+    setVariables(getAvailableVariables());
+
+    let ignore = false;
+    async function loadClients() {
+      try {
+        const loadedClients = await getClientList();
+        if (ignore) return;
+        setClients(loadedClients);
+        if (loadedClients.length > 0) {
+          setSelectedClientId(loadedClients[0].id);
+          setDraftValues(loadedClients[0].values);
+        }
+      } catch (error) {
+        toast.error(getApiErrorMessage(error));
+      } finally {
+        if (!ignore) setIsLoading(false);
+      }
+    }
+
+    void loadClients();
+    return () => {
+      ignore = true;
+    };
+  }, []);
+
+  const selectedClient = clients.find((client) => client.id === selectedClientId) || null;
+
+  const handleSelectClient = (client: SavedClient) => {
+    if (client.id === selectedClientId) return;
+    setSelectedClientId(client.id);
+    setDraftValues({ ...client.values });
+  };
+
+  const handleCreateClient = async () => {
+    const name = makeUniqueTitle("Novo cliente", clients.map((client) => client.name));
+    const values = { nome_cliente: name };
+    setIsSaving(true);
+    try {
+      const created = await createClient({ name, values });
+      setClients((current) => [created, ...current]);
+      setSelectedClientId(created.id);
+      setDraftValues(created.values);
+      toast.success("Cliente criado.");
+    } catch (error) {
+      toast.error(getApiErrorMessage(error));
+    } finally {
+      setIsSaving(false);
+    }
+  };
+
+  const handleSaveClient = async () => {
+    if (!selectedClient) return;
+    setIsSaving(true);
+    try {
+      const updated = await updateClient({
+        ...selectedClient,
+        name: draftValues.nome_cliente?.trim() || selectedClient.name,
+        values: draftValues,
+      });
+      setClients((current) =>
+        current.map((client) => (client.id === updated.id ? updated : client))
+      );
+      setSelectedClientId(updated.id);
+      setDraftValues(updated.values);
+      toast.success("Dados do cliente salvos.");
+    } catch (error) {
+      toast.error(getApiErrorMessage(error));
+    } finally {
+      setIsSaving(false);
+    }
+  };
+
+  const handleDeleteClient = async () => {
+    if (!selectedClient) return;
+    setIsSaving(true);
+    try {
+      await deleteClient(selectedClient.id);
+      const remainingClients = clients.filter((client) => client.id !== selectedClient.id);
+      setClients(remainingClients);
+      const nextClient = remainingClients[0] || null;
+      setSelectedClientId(nextClient?.id || null);
+      setDraftValues(nextClient?.values || {});
+      setShowDeleteDialog(false);
+      toast.success("Cliente excluido.");
+    } catch (error) {
+      toast.error(getApiErrorMessage(error));
+    } finally {
+      setIsSaving(false);
+    }
+  };
+
+  return (
+    <>
+      <div className="grid grid-cols-1 lg:grid-cols-[280px_minmax(0,1fr)] gap-5">
+        <div className="space-y-3">
+          <Button onClick={handleCreateClient} size="sm" className="w-full gap-2" disabled={isSaving}>
+            <Plus className="h-4 w-4" />
+            Novo Cliente
+          </Button>
+
+          <div className="space-y-2">
+            {isLoading ? (
+              <div className="rounded-xl border border-border bg-card px-4 py-3 text-sm text-muted-foreground">
+                Carregando clientes...
+              </div>
+            ) : clients.length === 0 ? (
+              <div className="rounded-xl border border-dashed border-border px-4 py-8 text-center text-sm text-muted-foreground">
+                Nenhum cliente cadastrado.
+              </div>
+            ) : (
+              clients.map((client) => {
+                const isSelected = client.id === selectedClientId;
+                return (
+                  <button
+                    key={client.id}
+                    onClick={() => handleSelectClient(client)}
+                    className={`w-full flex items-center gap-3 px-4 py-3 rounded-xl border text-left transition-[background-color,border-color,box-shadow,transform] duration-[var(--duration-base)] [transition-timing-function:var(--ease-out-quart)] hover:-translate-y-0.5 active:scale-[0.99] ${
+                      isSelected
+                        ? "border-primary/50 bg-primary/10 shadow-sm"
+                        : "border-border bg-card hover:border-primary/30 hover:bg-accent/40"
+                    }`}
+                  >
+                    <div
+                      className={`h-9 w-9 rounded-lg flex items-center justify-center shrink-0 transition-[background-color,transform] duration-[var(--duration-base)] [transition-timing-function:var(--ease-out-quart)] ${
+                        isSelected ? "bg-primary/15 scale-105" : "bg-primary/10"
+                      }`}
+                    >
+                      <UserRound className="h-4 w-4 text-primary" />
+                    </div>
+                    <div className="min-w-0">
+                      <p className="text-sm font-medium text-foreground truncate">{client.name}</p>
+                      <p className="text-xs text-muted-foreground">{formatDate(client.updatedAt)}</p>
+                    </div>
+                  </button>
+                );
+              })
+            )}
+          </div>
+        </div>
+
+        <div className="bg-card border border-border rounded-xl overflow-hidden">
+          <div className="px-5 py-4 border-b border-border flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
+            <div key={`client-header-${selectedClient?.id || "empty"}`} className="min-w-0 client-switch-motion">
+              <div className="flex items-center gap-2">
+                <Users className="h-4 w-4 text-primary" />
+                <h3 className="text-sm font-semibold text-foreground truncate">
+                  {selectedClient?.name || "Selecione um cliente"}
+                </h3>
+              </div>
+              <p className="text-xs text-muted-foreground mt-1">
+                Preencha os campos que existem na API Laravel.
+              </p>
+            </div>
+            <div className="flex gap-2">
+              <Button
+                onClick={() => setShowDeleteDialog(true)}
+                size="sm"
+                variant="outline"
+                className="gap-2 text-destructive hover:text-destructive"
+                disabled={!selectedClient || isSaving}
+              >
+                <Trash2 className="h-4 w-4" />
+                Excluir
+              </Button>
+              <Button onClick={handleSaveClient} size="sm" className="gap-2" disabled={!selectedClient || isSaving}>
+                <Save className="h-4 w-4" />
+                {isSaving ? "Salvando..." : "Salvar"}
+              </Button>
+            </div>
+          </div>
+
+          <div
+            key={`client-form-${selectedClient?.id || "empty"}`}
+            className="p-5 grid grid-cols-1 md:grid-cols-2 gap-4 client-switch-motion"
+          >
+            {!selectedClient && !isLoading && (
+              <div className="md:col-span-2 rounded-lg border border-dashed border-border p-8 text-center text-sm text-muted-foreground">
+                Crie ou selecione um cliente para editar.
+              </div>
+            )}
+            {selectedClient && variables.map((variable, index) => (
+            <div
+              key={variable.key}
+              className="space-y-1.5 client-field-motion"
+              style={{ animationDelay: `${Math.min(index, 8) * 24}ms` }}
+            >
+              <label className="text-xs font-medium text-muted-foreground uppercase tracking-wide">
+                {variable.label}
+              </label>
+              <Input
+                value={draftValues[variable.key] || ""}
+                onChange={(event) =>
+                  setDraftValues((current) => ({
+                    ...current,
+                    [variable.key]: event.target.value,
+                  }))
+                }
+                placeholder={`Valor para {{${variable.key}}}`}
+                disabled={!selectedClient || isSaving}
+              />
+            </div>
+            ))}
+          </div>
+        </div>
+      </div>
+
+      <AlertDialog open={showDeleteDialog} onOpenChange={setShowDeleteDialog}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>Excluir cliente</AlertDialogTitle>
+            <AlertDialogDescription>
+              O cliente sera excluido do back-end Laravel. Documentos ja criados nao serao removidos.
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel>Cancelar</AlertDialogCancel>
+            <AlertDialogAction
+              onClick={handleDeleteClient}
+              className="bg-destructive hover:bg-destructive/90 text-destructive-foreground"
+            >
+              Excluir
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
+    </>
+  );
+}
+
+// ==== Main Page ====
+
+const Documents = () => {
+  const [searchParams] = useSearchParams();
+  const tab = searchParams.get("tab") || "home";
+
+  const titles: Record<string, string> = {
+    home: "Home",
+    documents: "Documentos",
+    templates: "Templates",
+    variables: "Variáveis",
+    clients: "Clientes",
+  };
+
+  const descriptions: Record<string, string> = {
+    home: "Comece por aqui para entender o fluxo e acessar seus arquivos recentes.",
+    documents: "Documentos preenchidos com dados reais.",
+    templates: "Modelos base reutilizáveis para criar documentos.",
+    variables: "Consulte as variáveis disponíveis nos templates.",
+    clients: "Cadastre os valores reais das variáveis para cada cliente.",
+  };
+
+  return (
+    <div className="h-full flex flex-col overflow-hidden">
+      {/* Page header */}
+      <div className="px-4 sm:px-8 pt-6 sm:pt-8 pb-4">
+        <h1 className="text-xl sm:text-2xl font-bold text-foreground">{titles[tab]}</h1>
+        <p className="text-xs sm:text-sm text-muted-foreground mt-1">{descriptions[tab]}</p>
+      </div>
+
+      {/* Content — key forces remount + fade-up on every tab switch */}
+      <div key={tab} className="flex-1 overflow-y-auto px-4 sm:px-8 pb-8 animate-fade-up">
+        {tab === "home" && <HomeTab />}
+        {tab === "documents" && <DocumentsTab />}
+        {tab === "templates" && <TemplatesTab />}
+        {tab === "variables" && <VariablesTab />}
+        {tab === "clients" && <ClientsTab />}
+      </div>
+    </div>
+  );
+};
+
+export default Documents;

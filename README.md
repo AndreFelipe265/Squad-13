@@ -1,7 +1,5 @@
 # Squad-13
 
-# Sistema Docs
-
 Projeto Laravel para gerenciamento de clientes, templates e documentos, com API autenticada por Laravel Sanctum e assets front-end compilados com Vite.
 
 ## Tecnologias
@@ -51,7 +49,7 @@ npm -v
 ### 2. Entrar na pasta do projeto
 
 ```powershell
-cd C:\xampp\htdocs\sistema-docs
+cd (caminho onde foi salvo o projeto)
 ```
 
 ### 3. Instalar dependencias do back-end
@@ -133,7 +131,7 @@ Use dois terminais: um para o back-end e outro para o front-end.
 ### Terminal 1: back-end Laravel
 
 ```powershell
-cd C:\xampp\htdocs\sistema-docs
+cd (caminho onde foi salvo o projeto)
 php artisan serve --host=127.0.0.1 --port=8000
 ```
 
@@ -158,7 +156,7 @@ php artisan serve --host=127.0.0.1 --port=8001
 ### Terminal 2: front-end Vite
 
 ```powershell
-cd C:\xampp\htdocs\sistema-docs
+cd (caminho onde foi salvo o projeto)
 npm run dev
 ```
 
